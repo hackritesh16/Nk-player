@@ -1,1 +1,132 @@
+name: Build APK
 
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Naya push aaye to purana running build cancel ho jaye (time bachta hai)
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Agar repo mein project extract karke nahi, balki .zip file ki tarah upload hua hai
+      # (jaise MyPlayer.zip), to yahan CI mein use khud extract kar lete hain.
+      # Repo mein pehle se settings.gradle.kts hai to ye step kuch nahi karta.
+      - name: Unzip project if uploaded as .zip
+        run: |
+          FOUND=$(find . -maxdepth 4 -not -path './.git/*' \( -name settings.gradle.kts -o -name settings.gradle \) -print -quit)
+          if [ -n "$FOUND" ]; then
+            echo "Gradle project already in repo ($FOUND), unzip ki zarurat nahi."
+            exit 0
+          fi
+          shopt -s nullglob
+          ZIPS=(*.zip)
+          if [ ${#ZIPS[@]} -eq 0 ]; then
+            echo "Koi .zip file repo root mein nahi mili."
+            exit 0
+          fi
+          mkdir -p _unzipped
+          for z in "${ZIPS[@]}"; do
+            echo "Unzipping $z -> _unzipped/"
+            unzip -q -o "$z" -d _unzipped
+          done
+
+      # Gradle project (settings.gradle.kts) repo root mein ho ya kisi subfolder mein,
+      # yahan khud dhoondh leta hai. Nahi mila to repo ka structure print karke fail hota hai.
+      - name: Locate Gradle project
+        id: proj
+        run: |
+          SETTINGS=$(find . -maxdepth 4 -not -path './.git/*' \( -name settings.gradle.kts -o -name settings.gradle \) -printf '%d %p\n' | sort -n | head -n1 | cut -d' ' -f2-)
+          if [ -z "$SETTINGS" ]; then
+            echo "::error::settings.gradle.kts kahin nahi mila. Repo ka structure neeche print hua hai."
+            find . -maxdepth 4 -not -path './.git/*' | sort | head -100
+            exit 1
+          fi
+          DIR=$(dirname "$SETTINGS")
+          REL="${DIR#./}"
+          if [ "$REL" = "." ]; then
+            APK_GLOB="app/build/outputs/apk/**/*.apk"
+          else
+            APK_GLOB="$REL/app/build/outputs/apk/**/*.apk"
+          fi
+          echo "Gradle project dir: $DIR"
+          echo "APK glob: $APK_GLOB"
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+          echo "apk_glob=$APK_GLOB" >> "$GITHUB_OUTPUT"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # ubuntu-latest runner pe Android SDK pehle se installed hota hai (ANDROID_HOME set).
+      # android-actions/setup-android action fail ho raha tha, isliye use nahi karte.
+      # compileSdk 35 + AGP ke liye platform aur build-tools explicitly install karo
+      - name: Install Android SDK packages
+        run: |
+          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -path '*/bin/sdkmanager' | sort -V | tail -n1)
+          echo "Using sdkmanager: $SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+          build-root-directory: ${{ steps.proj.outputs.dir }}
+
+      - name: Build debug + release APK
+        working-directory: ${{ steps.proj.outputs.dir }}
+        run: |
+          set -o pipefail
+          gradle assembleDebug assembleRelease --stacktrace --console=plain 2>&1 | tee "$RUNNER_TEMP/gradle-build.log"
+
+      # Build fail ho to Kotlin ke "e: ..." errors run ke Summary page par (aur Annotations mein)
+      # dikhao, taaki 100+ lines ke log mein scroll na karna pade.
+      - name: Show build errors (on failure)
+        if: failure()
+        run: |
+          LOG="$RUNNER_TEMP/gradle-build.log"
+          [ -f "$LOG" ] || exit 0
+          ERRS=$(grep -E '^e: ' "$LOG" | sed -E 's#file://[^ ]*/myplayer/##' | head -40)
+          WENT=$(sed -n '/\* What went wrong:/,/\* Try:/p' "$LOG" | head -25)
+          {
+            echo "## Build failed"
+            if [ -n "$ERRS" ]; then
+              echo "### Kotlin compile errors"
+              echo '```'
+              echo "$ERRS"
+              echo '```'
+            fi
+            if [ -n "$WENT" ]; then
+              echo "### Gradle: what went wrong"
+              echo '```'
+              echo "$WENT"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "$ERRS" | head -10 | while IFS= read -r line; do
+            if [ -n "$line" ]; then echo "::error::$line"; fi
+          done
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: MyPlayer-apk
+          path: ${{ steps.proj.outputs.apk_glob }}
+          if-no-files-found: error
+          retention-days: 14

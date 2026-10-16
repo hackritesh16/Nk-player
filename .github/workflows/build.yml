@@ -21,36 +21,23 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-          cache: gradle
-          cache-dependency-path: |
-            NK_PLAYER/**/*.gradle*
-            NK_PLAYER/**/gradle-wrapper.properties
-            NK_PLAYER/gradle/*.versions.toml
-            NK_PLAYER/gradle.properties
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
           packages: platform-tools
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x ./gradlew
-        working-directory: NK_PLAYER
-
-      - name: Generate Gradle Wrapper JAR if missing
-        run: |
-          if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
-            echo 'Wrapper JAR missing — downloading...'
-            curl -L -o gradle/wrapper/gradle-wrapper.jar https://raw.githubusercontent.com/gradle/gradle/master/gradle/wrapper/gradle-wrapper.jar
-          fi
-        working-directory: NK_PLAYER
+      - name: Set up Gradle 8.6
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.6'
 
       - name: Build Debug APK
-        run: ./gradlew assembleDebug --stacktrace
+        run: gradle assembleDebug --stacktrace
         working-directory: NK_PLAYER
 
       - name: Build Release APK (unsigned)
-        run: ./gradlew assembleRelease --stacktrace
+        run: gradle assembleRelease --stacktrace
         working-directory: NK_PLAYER
 
       - name: Upload Debug APK

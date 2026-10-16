@@ -13,18 +13,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Extract Android project
+        run: unzip -q NK_PLAYER.zip -d .
+
       - name: Set up JDK 17
-        uses: actions/setup-java@v5  # v4 -> v5 kiya
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
           cache: gradle
+          cache-dependency-path: |
+            NK_PLAYER/**/*.gradle*
+            NK_PLAYER/**/gradle-wrapper.properties
+            NK_PLAYER/gradle/*.versions.toml
+            NK_PLAYER/gradle.properties
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
       - name: Grant execute permission for gradlew
         run: chmod +x ./gradlew
+        working-directory: NK_PLAYER
 
       - name: Generate Gradle Wrapper JAR if missing
         run: |
@@ -32,23 +41,26 @@ jobs:
             echo 'Wrapper JAR missing — downloading...'
             curl -L -o gradle/wrapper/gradle-wrapper.jar https://raw.githubusercontent.com/gradle/gradle/master/gradle/wrapper/gradle-wrapper.jar
           fi
+        working-directory: NK_PLAYER
 
       - name: Build Debug APK
         run: ./gradlew assembleDebug --stacktrace
+        working-directory: NK_PLAYER
 
       - name: Build Release APK (unsigned)
         run: ./gradlew assembleRelease --stacktrace
+        working-directory: NK_PLAYER
 
       - name: Upload Debug APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: NK-PLAYER-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          path: NK_PLAYER/app/build/outputs/apk/debug/*.apk
 
       - name: Upload Release APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: NK-PLAYER-release-apk
-          path: app/build/outputs/apk/release/*.apk
+          path: NK_PLAYER/app/build/outputs/apk/release/*.apk
